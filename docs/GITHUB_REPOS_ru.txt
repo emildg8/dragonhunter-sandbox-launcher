@@ -1,0 +1,15 @@
+Отдельные репозитории (аккаунт emildg8, ветка main):
+
+1) Запускатор
+   Локально в монорепозитории: share/Launcher (в родительском git игнорируется — см. корневой .gitignore).
+   GitHub: https://github.com/emildg8/dragonhunter-launcher
+
+2) Расставитель
+   Локально: share/Arranger (также в .gitignore родителя).
+   GitHub: https://github.com/emildg8/dragonhunter-arranger
+
+Состав каждого репозитория: .ps1 / .cmd, settings-*.txt, README*, CHANGELOG (у Запускатора); каталоги log/ и state/ не коммитятся.
+
+Развёртывание на новой машине: клонировать репозиторий с GitHub, править settings-*.txt, запускать .cmd.
+
+Варианты связки с монорепозиторием Dragonhunter: только клоны (как сейчас), или git submodule на эти URL — на ваш выбор.

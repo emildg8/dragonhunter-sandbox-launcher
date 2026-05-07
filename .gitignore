@@ -1,2 +1,9 @@
 # Local video analysis artifacts (do not commit)
 video_frames/
+
+# Отдельные git-клоны Запускателя и Расставителя (см. docs/GITHUB_REPOS_ru.txt)
+share/Launcher/
+share/Arranger/
+
+# Локальные сборки / архивы релизов
+dist/

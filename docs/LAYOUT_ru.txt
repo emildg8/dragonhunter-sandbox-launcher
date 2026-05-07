@@ -1,0 +1,17 @@
+Структура рабочей копии Dragonhunter (монорепозиторий)
+
+scripts/
+  Dragonhunter_3_окна.ps1      — локальный запуск N окон Sandboxie + опции монитора/Расставителя
+  dragonhunter-3-windows.config.psd1 — настройки для этого скрипта (можно копировать и править)
+  Dragonhunter_расстановка_окон.ps1 — старая ручная расстановка WinAPI (дублирует идею Расставителя)
+
+share/
+  SandboxLauncher/             — сценарий с конфигом .psd1 и монитором (общая логика со scripts)
+  Launcher/                    — отдельный git clone Запускатора (не коммитится в родитель при .gitignore)
+  Arranger/                    — отдельный git clone Расставителя
+
+docs/
+  GITHUB_REPOS_ru.txt          — ссылки на репозитории Launcher / Arranger
+  LAYOUT_ru.txt                — этот файл
+
+Корень: .gitignore дополняется под вашу политику (артifacts видео и т.д.).

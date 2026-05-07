@@ -31,6 +31,10 @@ $cdnMaxAttempts = [int]$cfg.CdnMaxAttempts
 $cdnDelaySec = [int]$cfg.CdnDelaySec
 $dnsWarmupServer = [string]$cfg.DnsWarmupServer
 $warmupDomains = @($cfg.WarmupDomains)
+$monitorClosedWindows = [bool]$cfg.MonitorClosedWindows
+$monitorPollSec = [int]$cfg.MonitorPollSec
+$monitorToastTitle = [string]$cfg.MonitorToastTitle
+$monitorDownConfirmChecks = [Math]::Max(1, [int]$cfg.MonitorDownConfirmChecks)
 
 if (-not (Test-Path -LiteralPath $startExe)) {
     Write-Host "Sandboxie Start.exe not found: $startExe" -ForegroundColor Red
@@ -43,6 +47,12 @@ if (-not (Test-Path -LiteralPath $launcherExe)) {
 if ($boxes.Count -lt 1) {
     Write-Host "No boxes configured in config file." -ForegroundColor Red
     exit 1
+}
+
+function Escape-XmlText {
+    param([string]$Text)
+    if ([string]::IsNullOrEmpty($Text)) { return "" }
+    return ($Text.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;").Replace('"', "&quot;").Replace("'", "&apos;"))
 }
 
 function Get-GameWindowHandle {
@@ -117,10 +127,10 @@ function Get-BoxState {
 }
 
 function Start-BoxWithRetry {
-    param([string]$Box)
+    param([string]$Box, [bool]$CdnPassedPreCheck)
     for ($attempt = 1; $attempt -le ($maxRetriesPerBox + 1); $attempt++) {
-        if (-not (Wait-CdnReady)) {
-            Write-Host "CDN unstable now. Starting anyway: $Box" -ForegroundColor Yellow
+        if ($attempt -eq 1 -and $enableCdnCheck -and (-not $CdnPassedPreCheck)) {
+            Write-Host "CDN unstable (pre-check). Starting anyway: $Box" -ForegroundColor Yellow
         }
         Write-Host "Start $Box (attempt $attempt/$($maxRetriesPerBox + 1))..." -ForegroundColor Yellow
         & $startExe "/box:$Box" "$launcherExe" | Out-Null
@@ -136,6 +146,85 @@ function Start-BoxWithRetry {
         }
     }
     return $false
+}
+
+function Show-WindowsToastNotification {
+    param(
+        [string]$Title,
+        [string]$Message
+    )
+
+    $safeTitle = Escape-XmlText -Text $Title
+    $safeMessage = Escape-XmlText -Text $Message
+
+    try {
+        [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+        [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
+
+        $xml = @"
+<toast activationType="foreground">
+  <visual>
+    <binding template="ToastGeneric">
+      <text>$safeTitle</text>
+      <text>$safeMessage</text>
+    </binding>
+  </visual>
+  <audio src="ms-winsoundevent:Notification.Default" />
+</toast>
+"@
+
+        $doc = New-Object Windows.Data.Xml.Dom.XmlDocument
+        $doc.LoadXml($xml)
+        $toast = [Windows.UI.Notifications.ToastNotification]::new($doc)
+        $notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("Windows PowerShell")
+        $notifier.Show($toast)
+    } catch {
+        Write-Host "Toast failed: $($_.Exception.Message)" -ForegroundColor DarkYellow
+    }
+
+    try {
+        [System.Media.SystemSounds]::Exclamation.Play()
+    } catch {}
+}
+
+function Start-WindowCloseMonitor {
+    param([string[]]$Boxes)
+
+    $wasUp = @{}
+    $downCount = @{}
+    foreach ($box in $Boxes) {
+        $wasUp[$box] = (Get-BoxState -Box $box) -ne "Down"
+        $downCount[$box] = 0
+    }
+
+    Write-Host "Window monitor is running. Press Ctrl+C to stop." -ForegroundColor Cyan
+
+    while ($true) {
+        foreach ($box in $Boxes) {
+            $isUp = (Get-BoxState -Box $box) -ne "Down"
+            $hadBeenUp = [bool]$wasUp[$box]
+
+            if ($isUp) {
+                $downCount[$box] = 0
+            } else {
+                $downCount[$box] = [int]$downCount[$box] + 1
+            }
+
+            $confirmedDown = (-not $isUp) -and ([int]$downCount[$box] -ge $monitorDownConfirmChecks)
+
+            if ($hadBeenUp -and $confirmedDown) {
+                $text = "Sandbox window '$box' was closed."
+                Write-Host $text -ForegroundColor Red
+                Show-WindowsToastNotification -Title $monitorToastTitle -Message $text
+                $wasUp[$box] = $false
+                continue
+            }
+
+            if ($isUp) { $wasUp[$box] = $true }
+        }
+
+        Start-Sleep -Seconds $monitorPollSec
+    }
 }
 
 Write-Host "Sandbox launcher: start $($boxes.Count) windows" -ForegroundColor Cyan
@@ -160,6 +249,14 @@ foreach ($domain in $warmupDomains) {
     try {
         Resolve-DnsName $domain -Type A -Server $dnsWarmupServer | Out-Null
     } catch {}
+}
+
+$cndWarmupOk = $true
+if ($enableCdnCheck) {
+    $cndWarmupOk = Wait-CdnReady
+    if (-not $cndWarmupOk) {
+        Write-Host "CDN check did not complete successfully; continuing with box startup." -ForegroundColor Yellow
+    }
 }
 
 foreach ($box in $boxes) {
@@ -187,7 +284,7 @@ foreach ($box in $boxes) {
         Start-Sleep -Seconds 2
     }
 
-    $ok = Start-BoxWithRetry -Box $box
+    $ok = Start-BoxWithRetry -Box $box -CdnPassedPreCheck $cndWarmupOk
     if (-not $ok) {
         Write-Host "Stop sequence: $box failed. Fix this box and rerun." -ForegroundColor Red
         exit 1
@@ -196,3 +293,7 @@ foreach ($box in $boxes) {
 }
 
 Write-Host "Done. All configured windows started." -ForegroundColor Green
+
+if ($monitorClosedWindows) {
+    Start-WindowCloseMonitor -Boxes $boxes
+}

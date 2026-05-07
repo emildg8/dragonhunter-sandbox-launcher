@@ -31,4 +31,10 @@
     ArrangeWaitForGameSec = 120
     RightNudgePx = 8
     VisualOverlapPx = 14
+
+    # Close-monitor behavior (toast + sound)
+    MonitorClosedWindows = $true
+    MonitorPollSec = 5
+    MonitorDownConfirmChecks = 5
+    MonitorToastTitle = "Dragonhunter Monitor"
 }
