@@ -111,6 +111,17 @@ function Stop-BoxProcesses {
     Start-Sleep -Seconds 2
 }
 
+function Get-BoxState {
+    param([string]$Box)
+
+    $gameHwnd = Get-GameWindowHandle -Box $Box
+    $launcherHwnd = Get-LauncherWindowHandle -Box $Box
+
+    if ($gameHwnd -ne 0 -and $launcherHwnd -eq 0) { return "Ready" }
+    if ($gameHwnd -ne 0 -or $launcherHwnd -ne 0) { return "Starting" }
+    return "Down"
+}
+
 function Start-BoxWithRetry {
     param(
         [string]$Box,
@@ -163,6 +174,31 @@ foreach ($domain in $warmupDomains) {
 
 for ($i = 0; $i -lt $boxes.Count; $i++) {
     $box = $boxes[$i]
+    $state = Get-BoxState -Box $box
+
+    if ($state -eq "Ready") {
+        Write-Host "$box is already running. Skip." -ForegroundColor DarkCyan
+        continue
+    }
+
+    if ($state -eq "Starting") {
+        Write-Host "$box is already starting. Waiting..." -ForegroundColor DarkCyan
+        if (Wait-BoxReady -Box $box -TimeoutSec 120 -StableSec 10) {
+            Write-Host "$box became ready. Skip restart." -ForegroundColor DarkCyan
+            continue
+        }
+
+        Write-Host "$box looks stuck. Restarting only this box..." -ForegroundColor DarkYellow
+        Stop-BoxProcesses -Box $box
+        Start-Sleep -Seconds 3
+    }
+
+    if ($state -eq "Down") {
+        # Clear possible hidden/zombie launcher processes in this box before fresh start.
+        Stop-BoxProcesses -Box $box
+        Start-Sleep -Seconds 2
+    }
+
     $ok = Start-BoxWithRetry -Box $box -Retries $MaxRetriesPerBox
     if (-not $ok) {
         Write-Host "Stop sequence: $box failed. Fix this box and rerun script." -ForegroundColor Red

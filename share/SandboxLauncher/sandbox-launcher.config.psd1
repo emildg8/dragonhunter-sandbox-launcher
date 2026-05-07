@@ -7,7 +7,7 @@
     Boxes = @("1Atarun", "2Emilian", "3Ceres")
 
     # Start behavior
-    SkipTerminate = $false
+    SkipTerminate = $true
     SkipCacheClear = $true
     LaunchDelaySec = 60
     WaitForGameSec = 900
