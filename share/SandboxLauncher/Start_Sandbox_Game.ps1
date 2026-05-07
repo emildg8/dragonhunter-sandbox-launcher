@@ -4,7 +4,14 @@ param(
 
 $ErrorActionPreference = "SilentlyContinue"
 
-if (-not $IsWindows) {
+#region Host & config load
+
+function Test-SbWindowsHost {
+    if ($PSVersionTable.PSEdition -eq "Desktop") { return $true }
+    return $IsWindows -eq $true
+}
+
+if (-not (Test-SbWindowsHost)) {
     Write-Host "This launcher works on Windows only (Sandboxie-Plus)." -ForegroundColor Red
     exit 1
 }
@@ -49,6 +56,10 @@ if ($boxes.Count -lt 1) {
     exit 1
 }
 
+#endregion
+
+#region Window / box helpers
+
 function Escape-XmlText {
     param([string]$Text)
     if ([string]::IsNullOrEmpty($Text)) { return "" }
@@ -65,7 +76,7 @@ function Get-GameWindowHandle {
         } |
         Select-Object -First 1
     if ($game) { return $game.MainWindowHandle }
-    return 0
+    return [IntPtr]::Zero
 }
 
 function Get-LauncherWindowHandle {
@@ -77,7 +88,7 @@ function Get-LauncherWindowHandle {
         } |
         Select-Object -First 1
     if ($launcher) { return $launcher.MainWindowHandle }
-    return 0
+    return [IntPtr]::Zero
 }
 
 function Wait-CdnReady {
@@ -100,7 +111,7 @@ function Wait-BoxReady {
     while ((Get-Date) -lt $deadline) {
         $gameHwnd = Get-GameWindowHandle -Box $Box
         $launcherHwnd = Get-LauncherWindowHandle -Box $Box
-        if ($gameHwnd -ne 0 -and $launcherHwnd -eq 0) {
+        if ($gameHwnd -ne [IntPtr]::Zero -and $launcherHwnd -eq [IntPtr]::Zero) {
             if (-not $stableSince) { $stableSince = Get-Date }
             if (((Get-Date) - $stableSince).TotalSeconds -ge $stableSec) { return $true }
         } else {
@@ -121,8 +132,8 @@ function Get-BoxState {
     param([string]$Box)
     $gameHwnd = Get-GameWindowHandle -Box $Box
     $launcherHwnd = Get-LauncherWindowHandle -Box $Box
-    if ($gameHwnd -ne 0 -and $launcherHwnd -eq 0) { return "Ready" }
-    if ($gameHwnd -ne 0 -or $launcherHwnd -ne 0) { return "Starting" }
+    if ($gameHwnd -ne [IntPtr]::Zero -and $launcherHwnd -eq [IntPtr]::Zero) { return "Ready" }
+    if ($gameHwnd -ne [IntPtr]::Zero -or $launcherHwnd -ne [IntPtr]::Zero) { return "Starting" }
     return "Down"
 }
 
@@ -188,7 +199,12 @@ function Show-WindowsToastNotification {
 }
 
 function Start-WindowCloseMonitor {
-    param([string[]]$Boxes)
+    param(
+        [string[]]$Boxes,
+        [int]$PollSec,
+        [int]$DownConfirmChecks,
+        [string]$ToastTitle
+    )
 
     $wasUp = @{}
     $downCount = @{}
@@ -210,12 +226,12 @@ function Start-WindowCloseMonitor {
                 $downCount[$box] = [int]$downCount[$box] + 1
             }
 
-            $confirmedDown = (-not $isUp) -and ([int]$downCount[$box] -ge $monitorDownConfirmChecks)
+            $confirmedDown = (-not $isUp) -and ([int]$downCount[$box] -ge $DownConfirmChecks)
 
             if ($hadBeenUp -and $confirmedDown) {
                 $text = "Sandbox window '$box' was closed."
                 Write-Host $text -ForegroundColor Red
-                Show-WindowsToastNotification -Title $monitorToastTitle -Message $text
+                Show-WindowsToastNotification -Title $ToastTitle -Message $text
                 $wasUp[$box] = $false
                 continue
             }
@@ -223,9 +239,13 @@ function Start-WindowCloseMonitor {
             if ($isUp) { $wasUp[$box] = $true }
         }
 
-        Start-Sleep -Seconds $monitorPollSec
+        Start-Sleep -Seconds $PollSec
     }
 }
+
+#endregion
+
+#region Main
 
 Write-Host "Sandbox launcher: start $($boxes.Count) windows" -ForegroundColor Cyan
 
@@ -238,7 +258,7 @@ if (-not $skipCacheClear) {
     foreach ($box in $boxes) {
         $launcherDir = Split-Path -Path $launcherExe -Parent
         $slsmruBase = Split-Path -Path $launcherDir -Parent
-        $drivePath = $slsmruBase.Substring(0,1) + $slsmruBase.Substring(2)
+        $drivePath = $slsmruBase.Substring(0, 1) + $slsmruBase.Substring(2)
         $base = "C:\Sandbox\$env:USERNAME\$box\drive\$drivePath"
         Remove-Item "$base\launcher\CefCache" -Recurse -Force -ErrorAction SilentlyContinue
         Remove-Item "$base\game\ext" -Force -ErrorAction SilentlyContinue
@@ -251,10 +271,10 @@ foreach ($domain in $warmupDomains) {
     } catch {}
 }
 
-$cndWarmupOk = $true
+$cdnWarmupOk = $true
 if ($enableCdnCheck) {
-    $cndWarmupOk = Wait-CdnReady
-    if (-not $cndWarmupOk) {
+    $cdnWarmupOk = Wait-CdnReady
+    if (-not $cdnWarmupOk) {
         Write-Host "CDN check did not complete successfully; continuing with box startup." -ForegroundColor Yellow
     }
 }
@@ -279,12 +299,11 @@ foreach ($box in $boxes) {
     }
 
     if ($state -eq "Down") {
-        # Clear possible hidden/zombie launcher processes in this box before fresh start.
         Stop-BoxProcesses -Box $box
         Start-Sleep -Seconds 2
     }
 
-    $ok = Start-BoxWithRetry -Box $box -CdnPassedPreCheck $cndWarmupOk
+    $ok = Start-BoxWithRetry -Box $box -CdnPassedPreCheck $cdnWarmupOk
     if (-not $ok) {
         Write-Host "Stop sequence: $box failed. Fix this box and rerun." -ForegroundColor Red
         exit 1
@@ -295,5 +314,8 @@ foreach ($box in $boxes) {
 Write-Host "Done. All configured windows started." -ForegroundColor Green
 
 if ($monitorClosedWindows) {
-    Start-WindowCloseMonitor -Boxes $boxes
+    Start-WindowCloseMonitor -Boxes $boxes -PollSec $monitorPollSec `
+        -DownConfirmChecks $monitorDownConfirmChecks -ToastTitle $monitorToastTitle
 }
+
+#endregion

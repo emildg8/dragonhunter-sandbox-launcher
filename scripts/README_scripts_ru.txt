@@ -17,3 +17,7 @@ Dragonhunter_3_окна.ps1
 MonitorInBackground в конфиге: отдельное окно PowerShell для монитора; нужен реальный файл конфигурации на диске по ConfigPath.
 
 Полный Запускатор и Расставитель с дополнительными функциями — в отдельных репозиториях GitHub (docs/GITHUB_REPOS_ru.txt).
+
+Ярлыки на рабочем столе (из корня монорепозитория Dragonhunter):
+  Запусти scripts\ShortcutDesktop.cmd или scripts\Install-DesktopShortcuts.ps1 — создаются ярлыки «Запускатор» и «Расставитель» на share\Launcher\Запускатор.cmd и share\Arranger\Расставитель.cmd (если эти папки есть).
+  Файлы Install-DesktopShortcuts.ps1 с кириллицей сохраняйте в UTF-8 с BOM, если открываете их двойным щелчком из проводника.
