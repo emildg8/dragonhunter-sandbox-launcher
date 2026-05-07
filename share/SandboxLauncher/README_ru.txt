@@ -11,7 +11,7 @@
   - StartExe (путь к Start.exe Sandboxie-Plus)
   - LauncherExe (путь к Dragon_hunter.exe)
   - Boxes (список боксов в нужном порядке)
-- Запусти Start_Sandbox_Game.cmd (или один раз **ShortcutDesktop.cmd** — ярлык **«Песочница Dragon Hunter»** на рабочем столе; Install-DesktopShortcuts.ps1 должен быть в UTF-8 с BOM при двойном щелчке).
+- Запусти Start_Sandbox_Game.cmd
 - После входа всех окон в игру запусти Arrange_Sandbox_Windows.cmd
 
 3) Как изменить количество окон
