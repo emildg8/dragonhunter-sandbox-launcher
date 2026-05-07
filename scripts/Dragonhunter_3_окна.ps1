@@ -286,8 +286,8 @@ if ($WaitForGameSec -ge 0) { $waitForGameSecEff = $WaitForGameSec } else { $wait
 if ($MaxRetriesPerBox -ge 0) { $maxRetriesEff = $MaxRetriesPerBox } else { $maxRetriesEff = [int]$cfg.MaxRetriesPerBox }
 
 $stableSecEff = [int]$cfg.StableSec
-$waitStartingTimeoutSec = [int]$cfg.WaitStartingTimeoutSec
-$waitStartingStableSec = [int]$cfg.WaitStartingStableSec
+$waitStartingTimeoutSec = if ($cfg.ContainsKey("WaitStartingTimeoutSec")) { [int]$cfg.WaitStartingTimeoutSec } else { 120 }
+$waitStartingStableSec = if ($cfg.ContainsKey("WaitStartingStableSec")) { [int]$cfg.WaitStartingStableSec } else { 10 }
 
 $enableCdnCheck = [bool]$cfg.EnableCdnCheck
 $cfgUrl = [string]$cfg.CfgUrl
@@ -300,10 +300,10 @@ $monitorClosedWindows = [bool]$cfg.MonitorClosedWindows
 $monitorPollSec = [int]$cfg.MonitorPollSec
 $monitorDownConfirmChecks = [Math]::Max(1, [int]$cfg.MonitorDownConfirmChecks)
 $monitorToastTitle = [string]$cfg.MonitorToastTitle
-$monitorInBackgroundCfg = [bool]$cfg.MonitorInBackground
+$monitorInBackgroundCfg = if ($cfg.ContainsKey("MonitorInBackground")) { [bool]$cfg.MonitorInBackground } else { $false }
 
-$runArrangerCfg = [bool]$cfg.RunArrangerAfterLaunch
-$arrangerPathCfg = [string]$cfg.ArrangerScriptPath
+$runArrangerCfg = if ($cfg.ContainsKey("RunArrangerAfterLaunch")) { [bool]$cfg.RunArrangerAfterLaunch } else { $false }
+$arrangerPathCfg = if ($cfg.ContainsKey("ArrangerScriptPath")) { [string]$cfg.ArrangerScriptPath } else { "" }
 
 $runArrangerEff = $runArrangerCfg
 if ($RunArrangerAfterLaunch) { $runArrangerEff = $true }
