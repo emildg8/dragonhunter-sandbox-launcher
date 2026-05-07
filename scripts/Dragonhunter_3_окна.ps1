@@ -13,6 +13,13 @@ param(
 
 $ErrorActionPreference = "SilentlyContinue"
 
+#region Helpers & config
+
+function Test-Dh3WindowsHost {
+    if ($PSVersionTable.PSEdition -eq "Desktop") { return $true }
+    return $IsWindows -eq $true
+}
+
 function Get-EmbeddedDefaultConfig {
     return @{
         StartExe                 = "C:\Program Files\Sandboxie-Plus\Start.exe"
@@ -27,23 +34,23 @@ function Get-EmbeddedDefaultConfig {
         WaitStartingTimeoutSec   = 120
         WaitStartingStableSec    = 10
         EnableCdnCheck           = $true
-        CfgUrl                     = "https://lyzs-cdnres.4399ru.com/RU/stable/mix_ru/up/pc_exe/cfg.xml"
-        CdnMaxAttempts             = 6
-        CdnDelaySec                = 10
-        DnsWarmupServer            = "9.9.9.9"
-        WarmupDomains              = @(
+        CfgUrl                   = "https://lyzs-cdnres.4399ru.com/RU/stable/mix_ru/up/pc_exe/cfg.xml"
+        CdnMaxAttempts           = 6
+        CdnDelaySec              = 10
+        DnsWarmupServer          = "9.9.9.9"
+        WarmupDomains            = @(
             "lyzs-cdnres.4399ru.com",
             "pc.4399sy.ru",
             "mkts.4399sy.ru",
             "y.4399sy.ru"
         )
-        MonitorClosedWindows       = $true
-        MonitorPollSec             = 5
-        MonitorDownConfirmChecks   = 5
-        MonitorToastTitle          = "Dragonhunter Monitor"
-        MonitorInBackground        = $false
-        RunArrangerAfterLaunch     = $false
-        ArrangerScriptPath         = ""
+        MonitorClosedWindows     = $true
+        MonitorPollSec           = 5
+        MonitorDownConfirmChecks = 5
+        MonitorToastTitle        = "Dragonhunter Monitor"
+        MonitorInBackground      = $false
+        RunArrangerAfterLaunch   = $false
+        ArrangerScriptPath       = ""
     }
 }
 
@@ -64,6 +71,28 @@ function Get-SandboxCacheBase {
     $drivePath = $slsmruBase.Substring(0, 1) + $slsmruBase.Substring(2)
     return "C:\Sandbox\$env:USERNAME\$BoxName\drive\$drivePath"
 }
+
+function Get-ConfigInt {
+    param($Cfg, [string]$Key, [int]$Default)
+    if ($Cfg.ContainsKey($Key)) { return [int]$Cfg[$Key] }
+    return $Default
+}
+
+function Get-ConfigBool {
+    param($Cfg, [string]$Key, [bool]$Default)
+    if ($Cfg.ContainsKey($Key)) { return [bool]$Cfg[$Key] }
+    return $Default
+}
+
+function Get-ConfigString {
+    param($Cfg, [string]$Key, [string]$Default)
+    if ($Cfg.ContainsKey($Key)) { return [string]$Cfg[$Key] }
+    return $Default
+}
+
+#endregion
+
+#region Sandbox / windows state
 
 function Get-GameWindowHandle {
     param([string]$Box)
@@ -93,6 +122,28 @@ function Get-LauncherWindowHandle {
     if ($launcher) { return $launcher.MainWindowHandle }
     return [IntPtr]::Zero
 }
+
+function Get-BoxState {
+    param([string]$Box)
+
+    $gameHwnd = Get-GameWindowHandle -Box $Box
+    $launcherHwnd = Get-LauncherWindowHandle -Box $Box
+
+    if ($gameHwnd -ne [IntPtr]::Zero -and $launcherHwnd -eq [IntPtr]::Zero) { return "Ready" }
+    if ($gameHwnd -ne [IntPtr]::Zero -or $launcherHwnd -ne [IntPtr]::Zero) { return "Starting" }
+    return "Down"
+}
+
+function Stop-BoxProcesses {
+    param([string]$Box, [string]$StartExePath)
+
+    & $StartExePath "/box:$Box" /terminate | Out-Null
+    Start-Sleep -Seconds 2
+}
+
+#endregion
+
+#region CDN & readiness
 
 function Wait-CdnReady {
     param(
@@ -147,23 +198,47 @@ function Wait-BoxReady {
     return $false
 }
 
-function Stop-BoxProcesses {
-    param([string]$Box, [string]$StartExePath)
+function Invoke-StartSingleBoxWithRetry {
+    param(
+        [string]$Box,
+        [string]$StartExe,
+        [string]$LauncherExe,
+        [int]$Retries,
+        [int]$WaitGameSec,
+        [int]$StableSec,
+        [int]$LaunchDelaySec,
+        [bool]$CdnPassed,
+        [bool]$EnableCdnCheck
+    )
 
-    & $StartExePath "/box:$Box" /terminate | Out-Null
-    Start-Sleep -Seconds 2
+    for ($attempt = 1; $attempt -le ($Retries + 1); $attempt++) {
+        if ($attempt -eq 1 -and $EnableCdnCheck -and (-not $CdnPassed)) {
+            Write-Host "CDN is unstable (pre-check). Starting anyway: $Box" -ForegroundColor Yellow
+        }
+
+        Write-Host "Start $Box (attempt $attempt/$($Retries + 1))..." -ForegroundColor Yellow
+        & $StartExe "/box:$Box" "$LauncherExe" | Out-Null
+        Start-Sleep -Seconds 3
+
+        if (Wait-BoxReady -Box $Box -TimeoutSec $WaitGameSec -StableSec $StableSec) {
+            Write-Host "$Box is ready in game (stable)." -ForegroundColor DarkGreen
+            return $true
+        }
+
+        Write-Host "$Box did not reach stable game state in time." -ForegroundColor DarkYellow
+        if ($attempt -le $Retries) {
+            Write-Host "Restarting only $Box..." -ForegroundColor DarkYellow
+            Stop-BoxProcesses -Box $Box -StartExePath $StartExe
+            Start-Sleep -Seconds $LaunchDelaySec
+        }
+    }
+
+    return $false
 }
 
-function Get-BoxState {
-    param([string]$Box)
+#endregion
 
-    $gameHwnd = Get-GameWindowHandle -Box $Box
-    $launcherHwnd = Get-LauncherWindowHandle -Box $Box
-
-    if ($gameHwnd -ne [IntPtr]::Zero -and $launcherHwnd -eq [IntPtr]::Zero) { return "Ready" }
-    if ($gameHwnd -ne [IntPtr]::Zero -or $launcherHwnd -ne [IntPtr]::Zero) { return "Starting" }
-    return "Down"
-}
+#region Monitor & toast
 
 function Show-WindowsToastNotification {
     param(
@@ -249,22 +324,30 @@ function Start-WindowCloseMonitor {
     }
 }
 
+#endregion
+
+#region Entry: detached monitor only
+
 if ($MonitorDetached) {
-    if (-not $IsWindows) { exit 1 }
+    if (-not (Test-Dh3WindowsHost)) { exit 1 }
     if (-not (Test-Path -LiteralPath $ConfigPath)) {
         Write-Host "Config not found: $ConfigPath" -ForegroundColor Red
         exit 1
     }
     $cfgDetached = Import-PowerShellDataFile -Path $ConfigPath
     $boxesDetached = @($cfgDetached.Boxes)
-    $pollDetached = [int]$cfgDetached.MonitorPollSec
-    $downChDetached = [Math]::Max(1, [int]$cfgDetached.MonitorDownConfirmChecks)
-    $toastDetached = [string]$cfgDetached.MonitorToastTitle
+    $pollDetached = Get-ConfigInt -Cfg $cfgDetached -Key "MonitorPollSec" -Default 5
+    $downChDetached = [Math]::Max(1, (Get-ConfigInt -Cfg $cfgDetached -Key "MonitorDownConfirmChecks" -Default 5))
+    $toastDetached = Get-ConfigString -Cfg $cfgDetached -Key "MonitorToastTitle" -Default "Dragonhunter Monitor"
     Start-WindowCloseMonitor -Boxes $boxesDetached -PollSec $pollDetached -DownConfirmChecks $downChDetached -ToastTitle $toastDetached
     exit 0
 }
 
-if (($PSVersionTable.PSEdition -eq 'Core') -and (-not $IsWindows)) {
+#endregion
+
+#region Entry: main
+
+if (-not (Test-Dh3WindowsHost)) {
     Write-Host "This script requires Windows (Sandboxie-Plus)." -ForegroundColor Red
     exit 1
 }
@@ -279,15 +362,15 @@ if (-not (Test-Path -LiteralPath $ConfigPath)) {
 $startExe = [string]$cfg.StartExe
 $launcherExe = [string]$cfg.LauncherExe
 $boxes = @($cfg.Boxes)
-$skipCacheClearEff = if ($PSBoundParameters.ContainsKey('SkipCacheClear')) { [bool]$SkipCacheClear } else { [bool]$cfg.SkipCacheClear }
+$skipCacheClearEff = if ($PSBoundParameters.ContainsKey("SkipCacheClear")) { [bool]$SkipCacheClear } else { [bool]$cfg.SkipCacheClear }
 
 if ($LaunchDelaySec -ge 0) { $launchDelaySecEff = $LaunchDelaySec } else { $launchDelaySecEff = [int]$cfg.LaunchDelaySec }
 if ($WaitForGameSec -ge 0) { $waitForGameSecEff = $WaitForGameSec } else { $waitForGameSecEff = [int]$cfg.WaitForGameSec }
 if ($MaxRetriesPerBox -ge 0) { $maxRetriesEff = $MaxRetriesPerBox } else { $maxRetriesEff = [int]$cfg.MaxRetriesPerBox }
 
 $stableSecEff = [int]$cfg.StableSec
-$waitStartingTimeoutSec = if ($cfg.ContainsKey("WaitStartingTimeoutSec")) { [int]$cfg.WaitStartingTimeoutSec } else { 120 }
-$waitStartingStableSec = if ($cfg.ContainsKey("WaitStartingStableSec")) { [int]$cfg.WaitStartingStableSec } else { 10 }
+$waitStartingTimeoutSec = Get-ConfigInt -Cfg $cfg -Key "WaitStartingTimeoutSec" -Default 120
+$waitStartingStableSec = Get-ConfigInt -Cfg $cfg -Key "WaitStartingStableSec" -Default 10
 
 $enableCdnCheck = [bool]$cfg.EnableCdnCheck
 $cfgUrl = [string]$cfg.CfgUrl
@@ -300,10 +383,10 @@ $monitorClosedWindows = [bool]$cfg.MonitorClosedWindows
 $monitorPollSec = [int]$cfg.MonitorPollSec
 $monitorDownConfirmChecks = [Math]::Max(1, [int]$cfg.MonitorDownConfirmChecks)
 $monitorToastTitle = [string]$cfg.MonitorToastTitle
-$monitorInBackgroundCfg = if ($cfg.ContainsKey("MonitorInBackground")) { [bool]$cfg.MonitorInBackground } else { $false }
+$monitorInBackgroundCfg = Get-ConfigBool -Cfg $cfg -Key "MonitorInBackground" -Default $false
 
-$runArrangerCfg = if ($cfg.ContainsKey("RunArrangerAfterLaunch")) { [bool]$cfg.RunArrangerAfterLaunch } else { $false }
-$arrangerPathCfg = if ($cfg.ContainsKey("ArrangerScriptPath")) { [string]$cfg.ArrangerScriptPath } else { "" }
+$runArrangerCfg = Get-ConfigBool -Cfg $cfg -Key "RunArrangerAfterLaunch" -Default $false
+$arrangerPathCfg = Get-ConfigString -Cfg $cfg -Key "ArrangerScriptPath" -Default ""
 
 $runArrangerEff = $runArrangerCfg
 if ($RunArrangerAfterLaunch) { $runArrangerEff = $true }
@@ -334,39 +417,6 @@ $runTerminateAll = ($cfg.SkipTerminate -ne $true)
 if ($TerminateAllAtStart) { $runTerminateAll = $true }
 if ($SkipTerminate) { $runTerminateAll = $false }
 
-function Invoke-StartSingleBoxWithRetry {
-    param(
-        [string]$Box,
-        [int]$Retries,
-        [bool]$CdnPassed,
-        [bool]$EnableCdn
-    )
-
-    for ($attempt = 1; $attempt -le ($Retries + 1); $attempt++) {
-        if ($attempt -eq 1 -and $EnableCdn -and (-not $CdnPassed)) {
-            Write-Host "CDN is unstable (pre-check). Starting anyway: $Box" -ForegroundColor Yellow
-        }
-
-        Write-Host "Start $Box (attempt $attempt/$($Retries + 1))..." -ForegroundColor Yellow
-        & $startExe "/box:$Box" "$launcherExe" | Out-Null
-        Start-Sleep -Seconds 3
-
-        if (Wait-BoxReady -Box $Box -TimeoutSec $waitForGameSecEff -StableSec $stableSecEff) {
-            Write-Host "$Box is ready in game (stable)." -ForegroundColor DarkGreen
-            return $true
-        }
-
-        Write-Host "$Box did not reach stable game state in time." -ForegroundColor DarkYellow
-        if ($attempt -le $Retries) {
-            Write-Host "Restarting only $Box..." -ForegroundColor DarkYellow
-            Stop-BoxProcesses -Box $Box -StartExePath $startExe
-            Start-Sleep -Seconds $launchDelaySecEff
-        }
-    }
-
-    return $false
-}
-
 Write-Host "Dragonhunter: start $($boxes.Count) sandbox window(s) | config=$ConfigPath" -ForegroundColor Cyan
 
 if ($runTerminateAll) {
@@ -384,10 +434,10 @@ if (-not $skipCacheClearEff) {
     }
 }
 
-$cndWarmupOk = $true
+$cdnWarmupOk = $true
 if ($enableCdnCheck) {
-    $cndWarmupOk = Wait-CdnReady -Url $cfgUrl -MaxAttempts $cdnMaxAttempts -DelaySec $cdnDelaySec
-    if (-not $cndWarmupOk) {
+    $cdnWarmupOk = Wait-CdnReady -Url $cfgUrl -MaxAttempts $cdnMaxAttempts -DelaySec $cdnDelaySec
+    if (-not $cdnWarmupOk) {
         Write-Host "CDN check did not complete successfully; continuing with box startup." -ForegroundColor Yellow
     }
 }
@@ -398,8 +448,7 @@ foreach ($domain in $warmupDomains) {
     } catch {}
 }
 
-for ($i = 0; $i -lt $boxes.Count; $i++) {
-    $box = $boxes[$i]
+foreach ($box in $boxes) {
     $state = Get-BoxState -Box $box
 
     if ($state -eq "Ready") {
@@ -424,7 +473,9 @@ for ($i = 0; $i -lt $boxes.Count; $i++) {
         Start-Sleep -Seconds 2
     }
 
-    $ok = Invoke-StartSingleBoxWithRetry -Box $box -Retries $maxRetriesEff -CdnPassed $cndWarmupOk -EnableCdn $enableCdnCheck
+    $ok = Invoke-StartSingleBoxWithRetry -Box $box -StartExe $startExe -LauncherExe $launcherExe `
+        -Retries $maxRetriesEff -WaitGameSec $waitForGameSecEff -StableSec $stableSecEff `
+        -LaunchDelaySec $launchDelaySecEff -CdnPassed $cdnWarmupOk -EnableCdnCheck $enableCdnCheck
     if (-not $ok) {
         Write-Host "Stop sequence: $box failed. Fix this box and rerun script." -ForegroundColor Red
         exit 1
@@ -451,7 +502,7 @@ $startMonitorBg = $monitorInBackgroundCfg -and $monitorClosedWindows -and (Test-
 
 if ($monitorClosedWindows) {
     if ($monitorInBackgroundCfg -and -not $startMonitorBg) {
-        Write-Host "MonitorInBackground требует существующий файл конфигурации ($ConfigPath); монитор будет в этом окне." -ForegroundColor Yellow
+        Write-Host "MonitorInBackground requires config file on disk ($ConfigPath); monitor runs in this window." -ForegroundColor Yellow
     }
     if ($startMonitorBg) {
         Start-Process -FilePath "powershell.exe" -ArgumentList @(
@@ -466,3 +517,5 @@ if ($monitorClosedWindows) {
             -DownConfirmChecks $monitorDownConfirmChecks -ToastTitle $monitorToastTitle
     }
 }
+
+#endregion
